@@ -1,0 +1,12 @@
+# Ignorar las dependencias de Node, se instalarán dentro del contenedor
+node_modules
+
+# Ignorar logs de npm
+npm-debug.log
+
+# Ignorar archivos de sistema
+.DS_Store
+*.swp
+
+# Ignorar el directorio de git
+.git
