@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const youtubedl = require('youtube-dl-exec');
+const { spawn } = require('child_process');
 const app = express();
 const port = 3000;
 
@@ -22,12 +22,55 @@ app.get('/download', async (req, res) => {
   try {
     console.log(`Iniciando obtención de metadatos para el video: ${videoId}`);
 
-    // 1. Obtener los metadatos del video, incluido el título.
-    const metadata = await youtubedl(videoUrl, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
+    // 1. Obtener los metadatos del video ejecutando yt-dlp directamente
+    const metadata = await new Promise((resolve, reject) => {
+      const process = spawn('python', [
+        '-m', 'yt_dlp',
+        '--dump-json',
+        '--no-warnings',
+        videoUrl
+      ]);
+
+      let output = '';
+      let errorOutput = '';
+
+      process.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      process.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+        console.error('yt-dlp stderr:', data.toString());
+      });
+
+      process.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`yt-dlp falló con código ${code}: ${errorOutput}`));
+        } else {
+          try {
+            const json = JSON.parse(output);
+            resolve(json);
+          } catch (e) {
+            reject(new Error(`Error al parsear JSON: ${e.message}`));
+          }
+        }
+      });
+
+      process.on('error', (err) => {
+        reject(new Error(`Error ejecutando yt-dlp: ${err.message}`));
+      });
     });
+
+    console.log('Metadata recibida:', typeof metadata);
+    
+    if (!metadata || typeof metadata !== 'object') {
+      throw new Error(`Metadata inválida: ${typeof metadata}`);
+    }
+
+    if (!metadata.title) {
+      console.error('Metadata completa:', JSON.stringify(metadata, null, 2));
+      throw new Error('El video no tiene título. Verifica que el ID sea válido.');
+    }
 
     const videoTitle = metadata.title.replace(/[<>:"/\|?*]/g, '_'); // Sanitizar el nombre del archivo
 
@@ -39,38 +82,41 @@ app.get('/download', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(videoTitle)}.mp4`);
 
     // 3. Obtener el stream del video en formato MP4 y canalizarlo a la respuesta.
-    const downloadStream = youtubedl.exec(videoUrl, {
-      output: '-', // Enviar a stdout
-      format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-      noWarnings: true,
-      preferFreeFormats: true,
-    });
+    console.log(`Iniciando descarga del video ${videoId}`);
+    
+    const downloadProcess = spawn('python', [
+      '-m', 'yt_dlp',
+      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      '-o', '-',
+      '--no-warnings',
+      videoUrl
+    ]);
 
-    console.log(`Iniciando streaming del video ${videoId} al cliente.`);
+    // Canalizar el stream de descarga directamente a la respuesta HTTP
+    downloadProcess.stdout.pipe(res);
 
-    // 4. Canalizar el stream de descarga directamente a la respuesta HTTP.
-    downloadStream.stdout.pipe(res);
-
-    downloadStream.stdout.on('end', () => {
-      console.log(`Streaming del video ${videoId} finalizado.`);
-    });
-
-    downloadStream.stderr.on('data', (data) => {
-      // yt-dlp a veces envía información de progreso a stderr, lo registramos por si acaso.
+    downloadProcess.stderr.on('data', (data) => {
       console.error(`yt-dlp stderr: ${data}`);
     });
 
-    downloadStream.on('error', (err) => {
-      console.error(`Error durante el streaming del video ${videoId}:`, err);
+    downloadProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`Descarga del video ${videoId} finalizó con código ${code}`);
+      } else {
+        console.log(`Descarga del video ${videoId} completada exitosamente`);
+      }
+    });
+
+    downloadProcess.on('error', (err) => {
+      console.error(`Error durante la descarga del video ${videoId}:`, err);
       if (!res.headersSent) {
         res.status(500).send('Error al procesar el video.');
       }
     });
 
     res.on('close', () => {
-        // Si el cliente cierra la conexión (cancela la descarga), terminamos el proceso de yt-dlp
-        console.log(`El cliente cerró la conexión. Terminando el proceso de yt-dlp para ${videoId}.`);
-        downloadStream.kill();
+      console.log(`El cliente cerró la conexión. Terminando yt-dlp para ${videoId}.`);
+      downloadProcess.kill();
     });
 
   } catch (error) {
