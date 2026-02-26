@@ -1,7 +1,10 @@
 const express = require('express');
+const cors = require('cors');
 const youtubedl = require('youtube-dl-exec');
 const app = express();
 const port = 3000;
+
+app.use(cors()); // Habilitar CORS para permitir peticiones desde la extensión de Chrome
 
 app.get('/', (req, res) => {
   res.send('Servidor de descarga de YouTube funcionando. Usa el endpoint /download?videoId=YOUR_VIDEO_ID');
@@ -27,14 +30,13 @@ app.get('/download', async (req, res) => {
     });
 
     const videoTitle = metadata.title.replace(/[<>:"/\|?*]/g, '_'); // Sanitizar el nombre del archivo
-    const safeFilename = `${videoTitle}.mp4`;
 
     console.log(`Título del video: ${metadata.title}`);
-    console.log(`Nombre de archivo seguro: ${safeFilename}`);
+    console.log(`Nombre de archivo seguro: ${videoTitle}.mp4`);
     
     // 2. Establecer las cabeceras para forzar la descarga en el navegador.
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
     res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(videoTitle)}.mp4`);
 
     // 3. Obtener el stream del video en formato MP4 y canalizarlo a la respuesta.
     const downloadStream = youtubedl.exec(videoUrl, {
